@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>權限申請表單</title>
+  <style>
+    :root {
+      --bg: #0b0c0f;
+      --card: #12141a;
+      --text: #e8e8ef;
+      --muted: #a7a8b3;
+      --accent: #4c8bf5;
+      --accent-2: #7aa2ff;
+      --danger: #ff6b6b;
+      --ok: #1db954;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Noto Sans TC", "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 56px; }
+    h1 { font-size: 1.375rem; margin: 8px 0 20px; letter-spacing: .3px; }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    label, .label { display: block; font-size: .95rem; color: var(--muted); margin-bottom: 8px; }
+    input[type="text"] {
+      width: 100%; padding: 12px 14px; border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12); background: #0f1117; color: var(--text);
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(76,139,245,.25); }
+    .radios { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .radio {
+      display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.1); background: #0e1015;
+    }
+    .radio:hover { border-color: rgba(255,255,255,.2); }
+    .hint { font-size: .86rem; color: var(--muted); margin-top: 8px; }
+    .row { display: grid; gap: 14px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 12px 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,.1);
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      color: white; font-weight: 600; cursor: pointer; width: 100%;
+    }
+    .btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .bar {
+      display:flex; gap:10px; align-items:center; justify-content:space-between; margin: 14px 0 0;
+      color: var(--muted); font-size: .86rem;
+    }
+    .status {
+      padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.1);
+      background: #10131a; font-size: .9rem;
+    }
+    .status.ok { border-color: rgba(29,185,84,.35); color: #aef3c2; }
+    .status.err { border-color: rgba(255,107,107,.4); color: #ffd3d3; }
+    .sr { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+    @media (min-width: 560px) {
+      .radios { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>權限申請表單</h1>
+
+    <form id="form" class="card" novalidate>
+      <div class="row">
+        <div>
+          <label for="name">姓名 <span class="sr">(必填)</span></label>
+          <input id="name" name="name" type="text" placeholder="請輸入您的姓名" required autocomplete="name" />
+        </div>
+
+        <div>
+          <div class="label">權限申請（擇一）</div>
+          <div id="permRadios" class="radios" role="radiogroup" aria-labelledby="permLabel">
+            <!-- 這裡會由 JS 動態建立 9 個選項 -->
+          </div>
+          <div class="hint">選項包含「總管」與「分店1~8」。分店名稱會自動載入。</div>
+        </div>
+
+        <button id="submitBtn" type="submit" class="btn">提交申請</button>
+
+        <div class="bar">
+          <span id="syncInfo">分店名稱載入中…</span>
+          <span id="submitState" class="status" style="display:none;"></span>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <script>
+  // === 請在此設定你的實際端點 ===
+  const APPLY_WEBHOOK  = "https://hook.eu2.make.com/gyve9a2f64iwhnvpcted6xprodhak5qb";
+  const SUBMIT_WEBHOOK = "https://hook.eu2.make.com/bm9yoiesnfig6k499bzyqoodo6qeb87g";
+
+  // 從 URL query 讀取 lineId
+  const urlParams = new URLSearchParams(window.location.search);
+  const lineId = urlParams.get("lineId") || null;
+
+  const state = {
+    sites: [],
+    chosen: null,
+  };
+
+  const $ = (sel) => document.querySelector(sel);
+  const permContainer = $("#permRadios");
+  const syncInfo = $("#syncInfo");
+  const submitBtn = $("#submitBtn");
+  const submitState = $("#submitState");
+
+  function showStatus(msg, kind = "") {
+    submitState.style.display = "inline-block";
+    submitState.className = `status ${kind}`;
+    submitState.textContent = msg;
+  }
+
+  function clearStatus() {
+    submitState.style.display = "none";
+    submitState.textContent = "";
+    submitState.className = "status";
+  }
+
+  function radioTemplate({ id, value, label, sublabel }) {
+    return `
+      <label class="radio" for="${id}">
+        <input id="${id}" type="radio" name="permission" value="${value}" required />
+        <div>
+          <div>${label}</div>
+          ${sublabel ? `<div class="hint">${sublabel}</div>` : ""}
+        </div>
+      </label>
+    `;
+  }
+
+  function buildPermissionRadios() {
+    let html = radioTemplate({
+      id: "perm-manager",
+      value: "manager",
+      label: "總管",
+      sublabel: "擁有所有分店的最高權限"
+    });
+
+    for (let i = 1; i <= 8; i++) {
+      const siteName = state.sites[i - 1] || `分店${i}`;
+      html += radioTemplate({
+        id: `perm-branch-${i}`,
+        value: `branch-${i}`,
+        label: `分店${i}（${siteName}）`,
+        sublabel: "僅擁有所屬分店之權限"
+      });
+    }
+    permContainer.innerHTML = html;
+  }
+
+  async function loadSites() {
+    syncInfo.textContent = "分店名稱載入中…";
+    try {
+      let res = await fetch(APPLY_WEBHOOK, { method: "GET" });
+      if (!res.ok) res = await fetch(APPLY_WEBHOOK, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      const sites = Array.isArray(data?.sites) ? data.sites.slice(0, 8) : [];
+      state.sites = Array.from({ length: 8 }, (_, i) => sites[i] || `分店${i+1}`);
+      buildPermissionRadios();
+
+      const now = new Date();
+      syncInfo.textContent = `分店名稱已同步：${now.toLocaleString()}`;
+    } catch (err) {
+      state.sites = Array.from({ length: 8 }, (_, i) => `分店${i+1}`);
+      buildPermissionRadios();
+      syncInfo.textContent = "⚠ 無法載入分店名稱，已使用預設名稱。";
+      console.error(err);
+    }
+  }
+
+  function gatherForm() {
+    const name = $("#name").value.trim();
+    const chosen = document.querySelector('input[name="permission"]:checked');
+    if (!name) throw new Error("請輸入姓名");
+    if (!chosen) throw new Error("請選擇一項權限");
+
+    let permission = "manager";
+    let siteIndex = null;
+    let siteName = null;
+
+    if (chosen.value === "manager") {
+      permission = "manager";
+    } else {
+      const idx = parseInt(chosen.value.replace("branch-", ""), 10);
+      permission = "branch";
+      siteIndex = idx;
+      siteName = state.sites[idx - 1] || null;
+    }
+
+    return {
+      lineId,              // 從 URL query 取得
+      name,
+      permission,
+      site_index: siteIndex,
+      site_name: siteName,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    clearStatus();
+
+    try {
+      const payload = gatherForm();
+      submitBtn.disabled = true;
+      submitBtn.textContent = "提交中…";
+
+      const res = await fetch(SUBMIT_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) throw new Error(`提交失敗（HTTP ${res.status}）`);
+
+      let info = "提交成功！";
+      try {
+        const data = await res.json();
+        if (data?.message) info = data.message;
+      } catch {}
+      showStatus(info, "ok");
+    } catch (err) {
+      console.error(err);
+      showStatus(err.message || "提交失敗", "err");
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "提交申請";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadSites();
+    $("#form").addEventListener("submit", handleSubmit);
+  });
+</script>
+
+</body>
+</html>
